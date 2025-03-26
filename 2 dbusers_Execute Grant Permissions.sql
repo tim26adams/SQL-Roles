@@ -1,7 +1,7 @@
-/* ======================================================================= */
-/*  Step 2: Grant Database-Level Permissions to the dbuser_Execute Role    */
-/* ======================================================================= */
-
+/* ====================================================================	*/
+/*  Step 2: Grant Database-Level Permissions to the dbuser_Execute Role	*/
+/* Grant Execute Permissions											*/
+/* ==================================================================	*/
 
 DECLARE @DatabaseName NVARCHAR(255)
 DECLARE @SQL NVARCHAR(MAX)
