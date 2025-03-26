@@ -1,0 +1,136 @@
+/* ======================================================================== */
+/* Step 1: Verification Script dbuser_Execute Role                          */              
+/* ======================================================================== */
+
+-- Verify Role Existence
+DECLARE @DatabaseName NVARCHAR(255);
+DECLARE db_cursor CURSOR FOR
+SELECT name
+FROM sys.databases
+WHERE state = 0 AND database_id > 4;
+
+OPEN db_cursor;
+FETCH NEXT FROM db_cursor INTO @DatabaseName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    DECLARE @SQL NVARCHAR(MAX) = N'
+    USE ' + QUOTENAME(@DatabaseName) + N';
+    IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = ''dbuser_Execute'')
+        PRINT ''[VERIFICATION] Database role dbuser_Execute exists in: ' + @DatabaseName + ''';
+    ELSE
+        PRINT ''[VERIFICATION] Database role dbuser_Execute DOES NOT EXIST in: ' + @DatabaseName + ''';';
+    EXEC sp_executesql @SQL;
+    FETCH NEXT FROM db_cursor INTO @DatabaseName;
+END;
+CLOSE db_cursor;
+DEALLOCATE db_cursor;
+GO
+
+-- Verify EXECUTE Permissions on Schemas
+-- Improved script to verify EXECUTE permissions on schemas for dbuser_Execute
+DECLARE @DatabaseName NVARCHAR(255),
+        @SchemaName NVARCHAR(255);
+
+-- Get all online, non-system databases
+DECLARE db_cursor CURSOR FOR
+SELECT name
+FROM sys.databases
+WHERE state = 0 AND database_id > 4;
+
+OPEN db_cursor;
+FETCH NEXT FROM db_cursor INTO @DatabaseName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    DECLARE @SchemaSQL NVARCHAR(MAX) = N'
+    USE ' + QUOTENAME(@DatabaseName) + N';
+    DECLARE @SchemaName NVARCHAR(255);
+    
+    -- Get all non-system schemas in current database
+    DECLARE schema_cursor CURSOR FOR
+    SELECT name
+    FROM ' + QUOTENAME(@DatabaseName) + '.sys.schemas
+    WHERE name NOT IN (''sys'', ''INFORMATION_SCHEMA'', ''guest'', ''dbo'');
+    
+    OPEN schema_cursor;
+    FETCH NEXT FROM schema_cursor INTO @SchemaName;
+    
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        IF EXISTS (
+            SELECT 1 
+            FROM ' + QUOTENAME(@DatabaseName) + '.sys.database_permissions dp 
+            JOIN ' + QUOTENAME(@DatabaseName) + '.sys.database_principals dpr ON dp.grantee_principal_id = dpr.principal_id 
+            JOIN ' + QUOTENAME(@DatabaseName) + '.sys.schemas s ON dp.major_id = s.schema_id 
+            WHERE dpr.name = ''dbuser_Execute'' 
+            AND dp.permission_name = ''EXECUTE'' 
+            AND s.name = @SchemaName
+        )
+            PRINT ''[PASS] dbuser_Execute has EXECUTE permission on schema ['' + @SchemaName + ''] in database: ' + @DatabaseName + ''';
+        ELSE
+            PRINT ''[FAIL] dbuser_Execute MISSING EXECUTE permission on schema ['' + @SchemaName + ''] in database: ' + @DatabaseName + ''';
+        
+        FETCH NEXT FROM schema_cursor INTO @SchemaName;
+    END;
+    
+    CLOSE schema_cursor;
+    DEALLOCATE schema_cursor;';
+    
+    EXEC sp_executesql @SchemaSQL;
+    FETCH NEXT FROM db_cursor INTO @DatabaseName;
+END;
+
+CLOSE db_cursor;
+DEALLOCATE db_cursor;
+GO
+
+
+-- Verify User Membership
+-- Script to verify users added to all schemas
+DECLARE @DatabaseName NVARCHAR(255);
+
+-- Get all online, non-system databases
+DECLARE db_cursor CURSOR FOR
+SELECT name
+FROM sys.databases
+WHERE state = 0 AND database_id > 4;
+
+OPEN db_cursor;
+FETCH NEXT FROM db_cursor INTO @DatabaseName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    DECLARE @UserSQL NVARCHAR(MAX) = N'
+    USE ' + QUOTENAME(@DatabaseName) + N';
+    
+    -- Get list of schemas and users/roles with their permissions
+    SELECT 
+        DB_NAME() AS DatabaseName,
+        s.name AS SchemaName,
+        dp.name AS PrincipalName,
+        dp.type_desc AS PrincipalType,
+        perm.permission_name AS Permission,
+        perm.state_desc AS PermissionState
+    FROM sys.schemas s
+    CROSS JOIN sys.database_principals dp
+    LEFT JOIN sys.database_permissions perm ON 
+        perm.major_id = s.schema_id AND 
+        perm.grantee_principal_id = dp.principal_id
+    WHERE 
+        s.name NOT IN (''sys'', ''INFORMATION_SCHEMA'', ''guest'') AND
+        dp.type IN (''S'', ''U'', ''R'') AND -- SQL users, Windows users, and roles
+        dp.name NOT IN (''public'', ''guest'', ''sys'', ''INFORMATION_SCHEMA'') AND
+        dp.is_fixed_role = 0
+    ORDER BY s.name, dp.name, perm.permission_name;';
+    
+    PRINT '------------ DATABASE: ' + @DatabaseName + ' ------------';
+    EXEC sp_executesql @UserSQL;
+    PRINT '---------------------------------------------------';
+    
+    FETCH NEXT FROM db_cursor INTO @DatabaseName;
+END;
+
+CLOSE db_cursor;
+DEALLOCATE db_cursor;
+GO
